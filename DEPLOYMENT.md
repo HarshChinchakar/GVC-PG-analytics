@@ -71,7 +71,33 @@ creates tables only — no development data is copied.
 
 Setting `DEBUG=false` also turns off `/docs` and `/openapi.json`.
 
-**Footprint:** all dependencies installed measure **101 MB** — about 20 % of the
+### Root directory and the Python version
+
+Set the service's **root directory to `backend`** — that is where
+`requirements.txt` and `.python-version` live.
+
+`backend/.python-version` pins **3.12.7**. Do not remove it. Render otherwise
+picks its own current default, and a newer interpreter than the wheels were
+built for fails the build outright:
+
+```
+ERROR: Could not find a version that satisfies the requirement psycopg-binary==3.2.3
+       (from versions: 3.2.10, 3.2.11, ...)
+```
+
+That is a missing **wheel for that Python**, not a missing release — the version
+exists, it just publishes no `cp314` build. Pinning the interpreter is what
+makes the build reproducible; chasing the newest package version each time
+Render moves its default is not.
+
+> **A service created by hand in the dashboard ignores `render.yaml` entirely.**
+> The `PYTHON_VERSION` and build command in that file apply only to a service
+> created from the Blueprint. If you clicked "New Web Service" and picked the
+> repo, set the values above in the dashboard yourself — `.python-version` is
+> read either way, which is why it exists as a file rather than only as
+> `PYTHON_VERSION` in the Blueprint.
+
+**Footprint:** all dependencies installed measure **105 MB** — about 21 % of the
 500 MB cap. `--workers 1` is deliberate: the login lockout counter lives in
 process memory, so a second worker would keep its own counter and halve the
 effective limit.

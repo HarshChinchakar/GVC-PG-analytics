@@ -9,6 +9,10 @@ services:
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
     envVars:
+      # Mirrors backend/.python-version, which is the authoritative pin and is
+      # honoured even by a service created by hand in the dashboard (such a
+      # service ignores this file completely). Letting Render pick its own
+      # default breaks the build: the pinned wheels have no cp314 build.
       - key: PYTHON_VERSION
         value: "3.12.7"
       - key: ENVIRONMENT

@@ -14,4 +14,9 @@ PyJWT==2.13.0
 
 # Postgres driver for Supabase. The [binary] build is a self-contained wheel:
 # no local libpq, no compiler needed on Render.
-psycopg[binary]==3.2.3
+#
+# Keep this at the version actually exercised against Supabase locally. 3.2.3
+# was pinned here but never installed -- and it publishes no wheel for Python
+# 3.14, so a builder that picked 3.14 failed with "No matching distribution".
+# See .python-version, which pins the interpreter for the same reason.
+psycopg[binary]==3.3.4

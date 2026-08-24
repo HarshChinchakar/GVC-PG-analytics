@@ -34,3 +34,8 @@ next-env.d.ts
 *.log
 .idea/
 .vscode/
+
+# --- local credentials ---------------------------------------------------
+# Development login cheat-sheet. Never committed, even though the seed
+# passwords it lists are already in the source.
+LOGIN_CREDENTIALS.txt

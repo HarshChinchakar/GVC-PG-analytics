@@ -49,7 +49,7 @@ cannot exfiltrate the session.
 
 | | |
 |---|---|
-| **Backend** | FastAPI · SQLAlchemy 2.0 · Pydantic v2 · PyJWT — 8 runtime dependencies, **94 MB** installed |
+| **Backend** | FastAPI · SQLAlchemy 2.0 · Pydantic v2 · PyJWT — 8 runtime dependencies, **105 MB** installed |
 | **Frontend** | Next.js 15 App Router · React 19 · Tailwind v4 — 103 kB shared JS |
 | **Database** | Supabase PostgreSQL 17 in production, SQLite locally, from one set of models |
 | **Auth** | Own `users` table, PBKDF2-HMAC-SHA256 at 600k iterations (OWASP) |
