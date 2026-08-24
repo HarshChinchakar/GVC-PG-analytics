@@ -1,0 +1,17 @@
+# Runtime dependencies. Deliberately short -- Render's free tier caps the
+# image at 500 MB, and every package here has to earn its place.
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+sqlalchemy==2.0.52
+alembic==1.19.1
+pydantic==2.13.4
+pydantic-settings==2.15.0
+
+# HS256 JWTs. Pure Python, no `cryptography` wheel -- python-jose[cryptography]
+# would have pulled in a rust-built dependency for no added capability here.
+PyJWT==2.13.0
+
+# Postgres driver for Supabase. The [binary] build is a self-contained wheel:
+# no local libpq, no compiler needed on Render.
+psycopg[binary]==3.2.3

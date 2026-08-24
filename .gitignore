@@ -1,0 +1,36 @@
+# --- secrets -------------------------------------------------------------
+# Every .env is ignored; only the *.example templates are committed.
+.env
+.env.*
+!.env.example
+!.env.local.example
+!.env.production.example
+
+# --- python --------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# --- local database ------------------------------------------------------
+# Development data is regenerated with `scripts/init_db.py --reset`.
+*.db
+*.db-wal
+*.db-shm
+
+# --- node / next ---------------------------------------------------------
+node_modules/
+.next/
+out/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+
+# --- misc ----------------------------------------------------------------
+.DS_Store
+*.log
+.idea/
+.vscode/
