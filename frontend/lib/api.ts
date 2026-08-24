@@ -200,6 +200,49 @@ export type VehicleSearch = {
   query: string; count: number; results: VehicleRow[];
 };
 
+export type ExpenseRow = {
+  id: string; category: string; category_label: string;
+  payee: string; description: string | null; amount: number;
+  expense_date: string; payment_mode: string; payment_reference: string | null;
+  paid_from: string; reimbursed_on: string | null;
+  status: string; void_reason: string | null;
+  paid_by: string; recorded_by: string; recorded_at: string;
+  template_name: string | null; notes: string | null;
+};
+
+export type DueItem = {
+  id: string; name: string; category: string; category_label: string;
+  payee: string; default_amount: number | null; payment_mode: string;
+  paid_from: string; day_of_month: number; suggested_date: string;
+  allowed: boolean;
+};
+
+export type ExpenseOptions = {
+  categories: {
+    value: string; label: string; group: string;
+    recurring: boolean; owner_only: boolean; allowed: boolean;
+  }[];
+  payment_modes: { value: string; label: string }[];
+  paid_from: { value: string; label: string }[];
+};
+
+export type ExpenseMonth = {
+  location_id: string; location_name: string; location_code: string;
+  period_year: number; period_month: number; period_label: string;
+  total: number; entry_count: number; voided_count: number;
+  reimbursements_owed: number;
+  by_category: {
+    category: string; label: string; group: string;
+    amount: number; count: number; share: number;
+  }[];
+  due_this_month: DueItem[];
+  expenses: ExpenseRow[];
+  options: ExpenseOptions;
+  trend: { period: string; label: string; total: number; count: number }[];
+  sites: { id: string; name: string; code: string }[];
+  generated_at: string;
+};
+
 export const api = {
   me: () => request<AuthUser>("/auth/me"),
   locations: () => request<LocationCard[]>("/locations"),
@@ -214,6 +257,10 @@ export const api = {
   occupancy: (id: string, year?: number, month?: number) => {
     const q = year && month ? `?year=${year}&month=${month}` : "";
     return request<Board>(`/locations/${id}/occupancy${q}`);
+  },
+  expenses: (id: string, year?: number, month?: number) => {
+    const q = year && month ? `?year=${year}&month=${month}` : "";
+    return request<ExpenseMonth>(`/locations/${id}/expenses${q}`);
   },
   vehicles: (id: string, q?: string) =>
     request<VehicleSearch>(

@@ -76,6 +76,21 @@ def sign_in(d, email: str, password: str) -> None:
     d.find_element(By.CSS_SELECTOR, "button[type=submit]").click()
 
 
+def tap(d, element) -> None:
+    """Click an element that a sticky header might be covering.
+
+    Selenium clicks at the element's centre point; if the sticky top bar
+    overlaps it, the bar receives the click instead. Centring the element
+    first, then clicking, is what a person does without thinking.
+    """
+    d.execute_script(
+        "arguments[0].scrollIntoView({block: 'center', behavior: 'instant'});",
+        element,
+    )
+    time.sleep(0.25)
+    element.click()
+
+
 def rgb(value: str) -> tuple[int, ...]:
     nums = [int(float(n)) for n in value.replace("rgba", "rgb").strip("rgb() ").split(",")[:3]]
     return tuple(nums)
@@ -818,6 +833,195 @@ def test_board_open_to_managers(d):
           "Whose vehicle is this?" in d.find_element(By.TAG_NAME, "body").text)
 
 
+def test_expenses_page(d):
+    """The expense workspace, end to end through a real browser."""
+    print("\n[26] Expenses page")
+    sign_in(d, *OWNER)
+    wait(d, EC.presence_of_element_located((By.CSS_SELECTOR, "a[href^='/sites/']")), 25)
+    target = None
+    for a in d.find_elements(By.CSS_SELECTOR, "a[href^='/sites/']"):
+        if "Kothrud" in a.text:
+            target = a.get_attribute("href")
+    d.get(target)
+    wait(d, EC.presence_of_element_located((By.TAG_NAME, "h1")), 25)
+    time.sleep(1.0)
+
+    link = d.find_elements(By.CSS_SELECTOR, "a[href*='/expenses']")
+    check("dashboard links to expenses", len(link) >= 1)
+    d.get(target + "/expenses")
+    wait(d, EC.presence_of_element_located((By.TAG_NAME, "h1")), 25)
+    time.sleep(1.2)
+
+    # Case-insensitive: several of these are `.label` elements that CSS
+    # renders in caps, and Selenium reports rendered text.
+    body = d.find_element(By.TAG_NAME, "body").text.upper()
+    for section in ("Spent this month", "Where it went", "Record an expense",
+                    "Still to record this month", "Owed back to staff"):
+        check(f"'{section}' present", section.upper() in body)
+    body = d.find_element(By.TAG_NAME, "body").text
+
+    # The category split must equal the headline total.
+    import re
+    total = re.search(r"SPENT THIS MONTH\s*\n\s*₹([\d,]+)", body.upper())
+    parts = [int(x.replace(",", "")) for x in re.findall(r"₹([\d,]+)\s+\d+\.\d%", body)]
+    if check("headline total rendered", total is not None) and parts:
+        check(
+            "category amounts sum to the headline total",
+            sum(parts) == int(total.group(1).replace(",", "")),
+            f"{sum(parts):,} vs {total.group(1)}",
+        )
+
+
+def test_expense_one_tap_prefill(d):
+    """A recurring item must arrive pre-filled, not blank."""
+    print("\n[27] One-tap recurring prefill")
+    due = d.find_elements(By.XPATH, "//button[contains(., 'Cooking gas') or contains(., 'Water tanker')]")
+    check("recurring items are offered", len(due) > 0, f"{len(due)} due")
+    if not due:
+        return
+    tap(d, due[0])
+    time.sleep(0.8)
+
+    amount = d.find_element(By.ID, "expense-amount").get_attribute("value")
+    payee = d.find_element(By.CSS_SELECTOR, "input[placeholder*='Shop']").get_attribute("value")
+    check("amount pre-filled", amount and int(amount) > 0, amount)
+    check("payee pre-filled", bool(payee), payee)
+    check("form opened automatically",
+          d.find_element(By.ID, "expense-amount").is_displayed())
+    pressed = d.find_elements(By.CSS_SELECTOR, "button[aria-pressed='true']")
+    check("a category is already selected", len(pressed) >= 1)
+
+
+def test_expense_submit_and_appears(d):
+    print("\n[28] Recording an expense")
+    before = len(d.find_elements(By.XPATH, "//button[normalize-space()='Repeat']"))
+
+    amount_field = d.find_element(By.ID, "expense-amount")
+    amount_field.clear()
+    amount_field.send_keys("4321")
+    payee = d.find_element(By.CSS_SELECTOR, "input[placeholder*='Shop']")
+    payee.clear()
+    payee.send_keys("Selenium Vendor")
+
+    tap(d, d.find_element(By.XPATH, "//button[normalize-space()='Record expense']"))
+    wait(d, lambda drv: "recorded" in drv.find_element(By.TAG_NAME, "body").text.lower(), 20)
+    time.sleep(2.0)
+
+    body = d.find_element(By.TAG_NAME, "body").text
+    check("success message shown", "recorded" in body.lower())
+    check("new entry appears in the ledger", "Selenium Vendor" in body)
+    after = len(d.find_elements(By.XPATH, "//button[normalize-space()='Repeat']"))
+    check("ledger grew by one", after == before + 1, f"{before} -> {after}")
+
+
+def test_expense_validation_in_browser(d):
+    print("\n[29] Form validation")
+    if not d.find_elements(By.ID, "expense-amount"):
+        tap(d, d.find_element(By.XPATH, "//button[contains(., 'Open')]"))
+        time.sleep(0.6)
+
+    payee = d.find_element(By.CSS_SELECTOR, "input[placeholder*='Shop']")
+    payee.clear()
+    payee.send_keys("No Amount Vendor")
+    tap(d, d.find_element(By.XPATH, "//button[normalize-space()='Record expense']"))
+    time.sleep(1.0)
+    alerts = d.find_elements(By.CSS_SELECTOR, "[role=alert]")
+    check("blank amount is refused", len(alerts) > 0,
+          alerts[0].text[:44] if alerts else "no error shown")
+    check("nothing was saved",
+          "No Amount Vendor" not in d.find_element(By.CSS_SELECTOR, "section:last-of-type").text)
+
+
+def test_expense_void_flow(d):
+    print("\n[30] Voiding an entry")
+    voids = d.find_elements(By.XPATH, "//button[normalize-space()='Void']")
+    check("void is offered on entries", len(voids) > 0, f"{len(voids)} rows")
+    if not voids:
+        return
+    tap(d, voids[0])
+    time.sleep(0.5)
+
+    confirm = d.find_element(By.XPATH, "//button[contains(., 'Confirm void')]")
+    check("confirm is disabled without a reason", not confirm.is_enabled())
+
+    d.find_element(By.CSS_SELECTOR, "input[placeholder*='Why is this wrong']").send_keys(
+        "recorded twice by mistake"
+    )
+    time.sleep(0.4)
+    tap(d, d.find_element(By.XPATH, "//button[contains(., 'Confirm void')]"))
+    time.sleep(2.2)
+
+    body = d.find_element(By.TAG_NAME, "body").text
+    check("voided count is surfaced", "voided" in body.lower())
+    check("the reason is kept visible",
+          "recorded twice by mistake" in body or "Show" in body)
+
+
+def test_expense_manager_restrictions(d):
+    """A manager files day-to-day spend, not the lease or the payroll."""
+    print("\n[31] Manager category limits")
+    sign_in(d, *MANAGER_KTD)
+    wait(d, EC.url_contains("/sites"), 25)
+    time.sleep(1.2)
+    site = d.current_url.split("?")[0]
+    d.get(site + "/expenses")
+    wait(d, EC.presence_of_element_located((By.TAG_NAME, "h1")), 25)
+    time.sleep(1.2)
+
+    check("manager can open the expenses page",
+          "EXPENSES" in d.find_element(By.TAG_NAME, "body").text.upper())
+
+    tap(d, d.find_element(By.XPATH, "//button[contains(., 'Open')]"))
+    time.sleep(0.6)
+
+    def chip(label):
+        found = d.find_elements(By.XPATH, f"//button[normalize-space()='{label} ★']")
+        if not found:
+            found = [b for b in d.find_elements(By.TAG_NAME, "button")
+                     if b.text.strip().startswith(label)]
+        return found[0] if found else None
+
+    rent = chip("Site rent")
+    check("owner-only category is shown but disabled",
+          rent is not None and not rent.is_enabled())
+    groceries = chip("Groceries")
+    check("day-to-day category is available",
+          groceries is not None and groceries.is_enabled())
+
+    # By id, not by position: the month picker is also a <select> and comes
+    # first in the DOM, so index 0 silently tested the wrong control.
+    site_select = d.find_elements(By.ID, "expense-site")
+    if check("site dropdown present", len(site_select) == 1):
+        opts = Select(site_select[0]).options
+        check("manager sees only their own site", len(opts) == 1,
+              f"{[o.text for o in opts]}")
+
+
+def test_expense_site_dropdown_for_owner(d):
+    """An owner can file against any building, from one dropdown."""
+    print("\n[32] Site dropdown for the owner")
+    sign_in(d, *OWNER)
+    wait(d, EC.presence_of_element_located((By.CSS_SELECTOR, "a[href^='/sites/']")), 25)
+    target = d.find_element(By.CSS_SELECTOR, "a[href^='/sites/']").get_attribute("href")
+    d.get(target + "/expenses")
+    wait(d, EC.presence_of_element_located((By.TAG_NAME, "h1")), 25)
+    time.sleep(1.2)
+    tap(d, d.find_element(By.XPATH, "//button[contains(., 'Open')]"))
+    time.sleep(0.6)
+
+    select = d.find_element(By.ID, "expense-site")
+    names = [o.text for o in Select(select).options]
+    check("owner may file against every site", len(names) == 3, str(names))
+    check("dropdown is enabled for an owner", select.is_enabled())
+
+    owner_only = [
+        b for b in d.find_elements(By.TAG_NAME, "button")
+        if b.text.strip().startswith("Site rent")
+    ]
+    check("owner-only categories are usable by an owner",
+          bool(owner_only) and owner_only[0].is_enabled())
+
+
 def test_card_depth(d):
     """Cards must be visually separated from the page, not flat on it."""
     print("\n[19] Card depth")
@@ -971,6 +1175,13 @@ def main() -> int:
         test_seat_filter_and_detail(d)
         test_vehicle_lookup(d)
         test_board_open_to_managers(d)
+        test_expenses_page(d)
+        test_expense_one_tap_prefill(d)
+        test_expense_submit_and_appears(d)
+        test_expense_validation_in_browser(d)
+        test_expense_void_flow(d)
+        test_expense_manager_restrictions(d)
+        test_expense_site_dropdown_for_owner(d)
         test_card_depth(d)
     except TimeoutException as exc:
         failed.append(("timeout during run", str(exc)[:120]))

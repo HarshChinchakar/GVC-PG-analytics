@@ -98,6 +98,8 @@ class PaymentMethod(StrEnum):
     CASH = "cash"
     UPI = "upi"
     BANK_TRANSFER = "bank_transfer"
+    CARD = "card"
+    CHEQUE = "cheque"
     OTHER = "other"
 
 
@@ -135,6 +137,97 @@ class VehicleType(StrEnum):
     OTHER = "other"
 
 
+class ExpenseStatus(StrEnum):
+    """An expense is never deleted -- money that was spent stays on the record.
+
+    A mistake is voided, which keeps the row, the reason and who voided it.
+    """
+
+    RECORDED = "recorded"
+    VOID = "void"
+
+
+class ExpenseCategory(StrEnum):
+    """What the money went on.
+
+    A fixed list rather than free text: the whole point of this feature is a
+    financial breakdown, and free-text categories produce "Electricity",
+    "electricty" and "Light bill" as three separate lines.
+    """
+
+    # -- owner-only: the fixed cost of running the business
+    SITE_RENT = "site_rent"
+    SALARIES = "salaries"
+    TAXES_LICENCES = "taxes_licences"
+    INSURANCE = "insurance"
+    LOAN_EMI = "loan_emi"
+    DEPOSIT_REFUND = "deposit_refund"
+
+    # -- day-to-day, recorded by whoever spent the money
+    ELECTRICITY = "electricity"
+    WATER = "water"
+    GAS = "gas"
+    GROCERIES = "groceries"
+    HOUSEKEEPING = "housekeeping"
+    REPAIRS = "repairs"
+    INTERNET = "internet"
+    LAUNDRY = "laundry"
+    SECURITY = "security"
+    TRANSPORT = "transport"
+    STAFF_WELFARE = "staff_welfare"
+    MARKETING = "marketing"
+    MISC = "misc"
+
+
+#: Categories only an owner may file. A manager runs the building day to day;
+#: the lease, the payroll and the tax bill are not theirs to book, and letting
+#: them would make the fixed-cost base editable by whoever holds a site login.
+OWNER_ONLY_CATEGORIES: frozenset[str] = frozenset({
+    ExpenseCategory.SITE_RENT,
+    ExpenseCategory.SALARIES,
+    ExpenseCategory.TAXES_LICENCES,
+    ExpenseCategory.INSURANCE,
+    ExpenseCategory.LOAN_EMI,
+    ExpenseCategory.DEPOSIT_REFUND,
+})
+
+#: Display names and grouping, served to the UI so the form cannot drift out of
+#: step with what the database will accept.
+CATEGORY_META: dict[str, dict[str, object]] = {
+    ExpenseCategory.SITE_RENT:      {"label": "Site rent",        "group": "Fixed",     "recurring": True},
+    ExpenseCategory.SALARIES:       {"label": "Salaries",         "group": "Fixed",     "recurring": True},
+    ExpenseCategory.TAXES_LICENCES: {"label": "Taxes & licences", "group": "Fixed",     "recurring": False},
+    ExpenseCategory.INSURANCE:      {"label": "Insurance",        "group": "Fixed",     "recurring": False},
+    ExpenseCategory.LOAN_EMI:       {"label": "Loan / EMI",       "group": "Fixed",     "recurring": True},
+    ExpenseCategory.DEPOSIT_REFUND: {"label": "Deposit refunded", "group": "Fixed",     "recurring": False},
+    ExpenseCategory.ELECTRICITY:    {"label": "Electricity",      "group": "Utilities", "recurring": True},
+    ExpenseCategory.WATER:          {"label": "Water",            "group": "Utilities", "recurring": True},
+    ExpenseCategory.GAS:            {"label": "Gas / LPG",        "group": "Utilities", "recurring": True},
+    ExpenseCategory.INTERNET:       {"label": "Internet",         "group": "Utilities", "recurring": True},
+    ExpenseCategory.GROCERIES:      {"label": "Groceries",        "group": "Running",   "recurring": False},
+    ExpenseCategory.HOUSEKEEPING:   {"label": "Housekeeping",     "group": "Running",   "recurring": False},
+    ExpenseCategory.REPAIRS:        {"label": "Repairs",          "group": "Running",   "recurring": False},
+    ExpenseCategory.LAUNDRY:        {"label": "Laundry",          "group": "Running",   "recurring": False},
+    ExpenseCategory.SECURITY:       {"label": "Security",         "group": "Running",   "recurring": True},
+    ExpenseCategory.TRANSPORT:      {"label": "Transport",        "group": "Running",   "recurring": False},
+    ExpenseCategory.STAFF_WELFARE:  {"label": "Staff welfare",    "group": "Running",   "recurring": False},
+    ExpenseCategory.MARKETING:      {"label": "Marketing",        "group": "Running",   "recurring": False},
+    ExpenseCategory.MISC:           {"label": "Miscellaneous",    "group": "Running",   "recurring": False},
+}
+
+
+class PaidFrom(StrEnum):
+    """Whose money left the building.
+
+    Without this a manager buying cleaning supplies out of pocket is
+    indistinguishable from petty cash, and nobody ever pays them back.
+    """
+
+    SITE_CASH = "site_cash"        # petty cash held at the PG
+    BUSINESS_ACCOUNT = "business_account"
+    PERSONAL = "personal"          # someone paid themselves; owed back
+
+
 class AuditAction(StrEnum):
     """Coarse action verbs for the audit trail."""
 
@@ -149,6 +242,8 @@ class AuditAction(StrEnum):
     SERVE_NOTICE = "serve_notice"
     RESERVE_BED = "reserve_bed"
     REFUND_DEPOSIT = "refund_deposit"
+    RECORD_EXPENSE = "record_expense"
+    VOID_EXPENSE = "void_expense"
 
 
 def values(enum_cls: type[StrEnum]) -> list[str]:

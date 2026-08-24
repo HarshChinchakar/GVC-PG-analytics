@@ -274,6 +274,71 @@ def main() -> int:
         len(vehicles),
     )
 
+    print("\n=== Expenses " + "=" * 47)
+    from app.models import Expense, ExpenseTemplate
+    from app.core.enums import ExpenseStatus, PaidFrom
+    from app.services import expenses as expense_service
+
+    all_expenses = db.scalars(select(Expense)).all()
+
+    # The database cannot enforce this portably -- SQLite and Postgres extract
+    # date parts with different syntax -- so it is asserted here on every row.
+    drifted = [
+        e for e in all_expenses
+        if (e.period_year, e.period_month) != expense_service.period_of(e.expense_date)
+    ]
+    eq("expense period always matches its date", len(drifted), 0)
+
+    eq("every idempotency key is unique",
+       len({e.idempotency_key for e in all_expenses}), len(all_expenses))
+    eq("every expense amount is positive",
+       sum(1 for e in all_expenses if e.amount > 0), len(all_expenses))
+    eq("voided expenses carry a reason and an author",
+       sum(1 for e in all_expenses
+           if e.status == ExpenseStatus.VOID
+           and (not e.void_reason or not e.voided_by_user_id)), 0)
+    eq("only personally-funded spend is marked reimbursed",
+       sum(1 for e in all_expenses
+           if e.reimbursed_on and e.paid_from != PaidFrom.PERSONAL), 0)
+
+    # One recurring item cannot be booked twice in a month.
+    booked = [
+        (e.template_id, e.period_year, e.period_month)
+        for e in all_expenses
+        if e.template_id and e.status == ExpenseStatus.RECORDED
+    ]
+    eq("each recurring item is booked at most once a month",
+       len(set(booked)), len(booked))
+
+    eq("no expense crosses a location boundary",
+       sum(1 for e in all_expenses
+           if e.template_id
+           and db.get(ExpenseTemplate, e.template_id).location_id != e.location_id), 0)
+
+    for loc in locations:
+        for year, month in [(2026, 6), (2026, 7), (2026, 8)]:
+            view = expense_service.month_view(db, ctx, loc.id, year, month, today=TODAY)
+            rows = [
+                e for e in all_expenses
+                if e.location_id == loc.id
+                and (e.period_year, e.period_month) == (year, month)
+                and e.status == ExpenseStatus.RECORDED
+            ]
+            tag = f"{loc.code} {year}-{month:02d}"
+            eq(f"expenses {tag}: total = sum of live rows",
+               view["total"], sum(e.amount for e in rows))
+            eq(f"expenses {tag}: entry count", view["entry_count"], len(rows))
+            eq(f"expenses {tag}: category split sums to the total",
+               sum(c["amount"] for c in view["by_category"]), view["total"])
+            eq(f"expenses {tag}: reimbursements owed",
+               view["reimbursements_owed"],
+               sum(e.amount for e in rows
+                   if e.paid_from == PaidFrom.PERSONAL and e.reimbursed_on is None))
+            # A recurring item already booked must not appear as still due.
+            booked_ids = {str(e.template_id) for e in rows if e.template_id}
+            eq(f"expenses {tag}: nothing booked is also listed as due",
+               len([d for d in view["due_this_month"] if d["id"] in booked_ids]), 0)
+
     print("\n=== Cross-location integrity " + "=" * 31)
     all_stays = db.scalars(select(ResidentStay).where(ResidentStay.is_current.is_(True))).all()
     eq("no bed holds two current residents",

@@ -22,6 +22,9 @@ from sqlalchemy.orm import Session
 
 from app.core.enums import (
     AuditAction,
+    ExpenseCategory,
+    ExpenseStatus,
+    PaidFrom,
     ReservationStatus,
     VehicleType,
     BedStatus,
@@ -37,10 +40,12 @@ from app.core.enums import (
     UserRole,
 )
 from app.core.security import hash_password
-from app.core.types import utcnow
+from app.core.types import new_uuid, utcnow
 from app.models import (
     AuditLog,
     Bed,
+    Expense,
+    ExpenseTemplate,
     BedReservation,
     Vehicle,
     normalise_plate,
@@ -650,6 +655,138 @@ def _reserve_bed(
     bed.status = BedStatus.BOOKED
 
 
+# --- expenses -----------------------------------------------------------
+
+#: The costs that land every month, per building. Amounts scale with the site.
+RECURRING = [
+    ("Building lease",   ExpenseCategory.SITE_RENT,   "Property owner",     1.00, 5,  PaymentMethod.BANK_TRANSFER, PaidFrom.BUSINESS_ACCOUNT),
+    ("Cook salary",      ExpenseCategory.SALARIES,    "Kitchen staff",      0.14, 1,  PaymentMethod.CASH,          PaidFrom.BUSINESS_ACCOUNT),
+    ("Housekeeping staff", ExpenseCategory.SALARIES,  "Cleaning staff",     0.10, 1,  PaymentMethod.CASH,          PaidFrom.BUSINESS_ACCOUNT),
+    ("Watchman salary",  ExpenseCategory.SECURITY,    "Night watchman",     0.08, 1,  PaymentMethod.CASH,          PaidFrom.BUSINESS_ACCOUNT),
+    ("Electricity bill", ExpenseCategory.ELECTRICITY, "MSEDCL",             None, 12, PaymentMethod.UPI,           PaidFrom.BUSINESS_ACCOUNT),
+    ("Water tanker",     ExpenseCategory.WATER,       "Sai Water Supply",   0.05, 8,  PaymentMethod.CASH,          PaidFrom.SITE_CASH),
+    ("Broadband",        ExpenseCategory.INTERNET,    "ACT Fibernet",       0.02, 7,  PaymentMethod.UPI,           PaidFrom.BUSINESS_ACCOUNT),
+    ("Cooking gas",      ExpenseCategory.GAS,         "Bharat Gas",         0.06, 15, PaymentMethod.CASH,          PaidFrom.SITE_CASH),
+]
+
+#: One-off spend a manager files during the month.
+AD_HOC = [
+    (ExpenseCategory.GROCERIES,    ["Reliance Fresh", "Local kirana", "D-Mart"],       1500,  9000,  "Weekly provisions"),
+    (ExpenseCategory.REPAIRS,      ["Ramesh Plumbing", "Sharma Electricals", "Handyman"], 400, 6500, "Repair work"),
+    (ExpenseCategory.HOUSEKEEPING, ["Cleaning supplies", "Hardware store"],             300,  2200,  "Cleaning materials"),
+    (ExpenseCategory.LAUNDRY,      ["Sparkle Laundry"],                                 800,  3000,  "Bedsheet wash"),
+    (ExpenseCategory.TRANSPORT,    ["Auto fare", "Porter"],                             150,   900,  "Local transport"),
+    (ExpenseCategory.STAFF_WELFARE,["Staff tea & snacks"],                              200,  1200,  "Staff refreshments"),
+    (ExpenseCategory.MISC,         ["Sundry"],                                          200,  2500,  "Miscellaneous"),
+]
+
+
+def _seed_expenses(
+    db: Session,
+    *,
+    location: Location,
+    owner: User,
+    manager: User,
+    monthly_rent_roll: int,
+) -> None:
+    """Recurring templates, plus three months of plausible spend.
+
+    Amounts are derived from the building's rent roll so that expenses sit in
+    a believable ratio to income -- roughly 55-65% of revenue, which is what a
+    PG actually runs at once lease and salaries are counted.
+    """
+    templates: list[ExpenseTemplate] = []
+    for name, category, payee, share, day, mode, source in RECURRING:
+        amount = None if share is None else int(round(monthly_rent_roll * share * 0.55 / 500)) * 500
+        template = ExpenseTemplate(
+            location_id=location.id,
+            name=name,
+            category=category,
+            payee=payee,
+            default_amount=amount,
+            payment_mode=mode,
+            paid_from=source,
+            day_of_month=day,
+            created_by_user_id=owner.id,
+        )
+        db.add(template)
+        templates.append(template)
+    db.flush()
+
+    for year, month in _recent_periods(3):
+        is_current = (year, month) == (TODAY.year, TODAY.month)
+
+        for template in templates:
+            # The current month is deliberately left part-done, so the
+            # "due this month" checklist has something in it.
+            if is_current and template.category in (
+                ExpenseCategory.WATER, ExpenseCategory.GAS
+            ):
+                continue
+
+            amount = template.default_amount
+            if amount is None:  # electricity varies with the season
+                amount = int(round(monthly_rent_roll * 0.035 / 100)) * 100
+                amount += RNG.randint(-1500, 2500)
+            day = min(template.day_of_month, 28)
+            when = date(year, month, day)
+            if when > TODAY:
+                continue
+
+            db.add(
+                Expense(
+                    location_id=location.id,
+                    category=template.category,
+                    payee=template.payee,
+                    description=template.name,
+                    amount=max(amount, 500),
+                    expense_date=when,
+                    period_year=year,
+                    period_month=month,
+                    payment_mode=template.payment_mode,
+                    paid_from=template.paid_from,
+                    status=ExpenseStatus.RECORDED,
+                    paid_by_user_id=owner.id,
+                    recorded_by_user_id=owner.id,
+                    template_id=template.id,
+                    idempotency_key=new_uuid(),
+                )
+            )
+
+        # Ad-hoc spend, filed by the manager who actually bought the thing.
+        for _ in range(RNG.randint(5, 9)):
+            category, payees, low, high, note = RNG.choice(AD_HOC)
+            day = RNG.randint(1, 28)
+            when = date(year, month, day)
+            if when > TODAY:
+                continue
+            personal = RNG.random() < 0.22
+            db.add(
+                Expense(
+                    location_id=location.id,
+                    category=category,
+                    payee=RNG.choice(payees),
+                    description=note,
+                    amount=int(round(RNG.randint(low, high) / 50)) * 50,
+                    expense_date=when,
+                    period_year=year,
+                    period_month=month,
+                    payment_mode=RNG.choice([PaymentMethod.CASH, PaymentMethod.UPI]),
+                    paid_from=PaidFrom.PERSONAL if personal else PaidFrom.SITE_CASH,
+                    # Older reimbursements have been settled; recent ones have not.
+                    reimbursed_on=(
+                        when + timedelta(days=RNG.randint(3, 12))
+                        if personal and not is_current
+                        else None
+                    ),
+                    status=ExpenseStatus.RECORDED,
+                    paid_by_user_id=manager.id,
+                    recorded_by_user_id=manager.id,
+                    idempotency_key=new_uuid(),
+                )
+            )
+
+
 # --- entry point --------------------------------------------------------
 
 
@@ -671,6 +808,18 @@ def seed(db: Session) -> dict[str, int]:
         is_active=True,
     )
     db.add(owner)
+
+    # Two owners today, more later. Both reach every building by role, so
+    # neither needs a row in user_locations.
+    co_owner = User(
+        email="admin@gvcexecutive.in",
+        full_name="Vaibhav Chinchakar",
+        phone="9820022222",
+        role=UserRole.SUPER_ADMIN,
+        password_hash=hash_password("admin@123"),
+        is_active=True,
+    )
+    db.add(co_owner)
     db.flush()
 
     specs = [
@@ -746,6 +895,19 @@ def seed(db: Session) -> dict[str, int]:
                 db, location=location, resident=resident, used_plates=used_plates
             )
 
+        # Expenses need the rent roll to scale against, so this runs after the
+        # residents are in place.
+        rent_roll = sum(
+            b.default_rent for b in beds if b.status == BedStatus.OCCUPIED
+        )
+        _seed_expenses(
+            db,
+            location=location,
+            owner=owner if index % 2 == 0 else co_owner,
+            manager=manager,
+            monthly_rent_roll=rent_roll,
+        )
+
         # Hold a couple of the remaining empty beds for people arriving soon,
         # so the board has a real BOOKED state to show.
         still_empty = [b for b in rentable if b.status == BedStatus.AVAILABLE]
@@ -782,7 +944,8 @@ def seed(db: Session) -> dict[str, int]:
     for model in (
         User, UserLocation, Location, Floor, Flat, Room, Bed, Resident,
         ResidentStay, RentRecord, Payment, Deposit, DepositRefund,
-        MoveOutNotice, BedReservation, Vehicle, AuditLog,
+        MoveOutNotice, BedReservation, Vehicle,
+        ExpenseTemplate, Expense, AuditLog,
     ):
         counts[model.__tablename__] = db.scalar(select(func.count()).select_from(model))
     return counts

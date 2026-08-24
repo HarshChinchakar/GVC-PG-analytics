@@ -21,6 +21,7 @@ has paid, what is empty, and what the month came to.
 | **Revenue analysis** | owner only | Yield decomposed into empty beds vs under-pricing vs non-payment, cut six ways |
 | **Occupancy board** | both | A cinema-style seat map of every bed, filterable |
 | **Vehicle lookup** | both | "Whose bike is this?" — partial plate search |
+| **Expenses** | both | Record spend per site; recurring costs are one tap |
 
 ### Two roles
 
@@ -114,7 +115,7 @@ Render to the Vercel domain.
 # terminal 1 — API on :8000
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m scripts.init_db --reset      # schema + 1,518 seed rows
+.venv/bin/python -m scripts.init_db --reset      # schema + 1,663 seed rows
 .venv/bin/python -m uvicorn app.main:app --port 8000
 
 # terminal 2 — web on :3000
@@ -129,6 +130,7 @@ Local seed logins — SQLite only, never created on Supabase by `init_db`:
 | Account | Email | Password |
 |---|---|---|
 | Owner | `owner@gvcexecutive.in` | `owner@123` |
+| Owner (second) | `admin@gvcexecutive.in` | `admin@123` |
 | Manager (Kothrud) | `manager.ktd@gvcexecutive.in` | `ktd@123` |
 
 > **Pin `typescript@5.x`.** `npm i -D typescript` now installs TypeScript 7,
@@ -147,10 +149,10 @@ Local seed logins — SQLite only, never created on Supabase by `init_db`:
 ```bash
 cd backend
 .venv/bin/python -m scripts.verify        # 25 schema + access-control checks
-.venv/bin/python -m scripts.crosscheck    # 206 figure-by-figure cross-checks
+.venv/bin/python -m scripts.crosscheck    # 258 figure-by-figure cross-checks
 
 cd ../frontend
-python3 tests/test_ui.py                  # 160 Selenium UI checks (needs both servers)
+python3 tests/test_ui.py                  # 189 Selenium UI checks (needs both servers)
 ```
 
 **`crosscheck` recomputes every figure a second way** — pulling raw rows and
@@ -182,7 +184,11 @@ that exact bug is what prompted them.
   that is not declared there cannot be serialised, so `password_hash` is absent
   by construction rather than by vigilance.
 * **Money rules are database constraints**, not conventions: one payment per
-  month, one bill per stay per month, and a CHECK that deposit refunds add up.
+  month, one bill per stay per month, one recurring expense per month, and
+  CHECKs that deposit refunds add up and that a void states its reason.
+* **Writes are idempotent.** Every expense carries a key; a replay returns the
+  original row rather than booking the money twice.
+* **CSRF origin checks** on the write proxies, on top of `SameSite=Lax`.
 
 ---
 
@@ -208,6 +214,7 @@ skills/          reference material used while building
 
 ## Not yet built
 
-Write actions (mark rent paid, assign a bed, serve notice), the Residents and
+The remaining write actions (mark rent paid, assign a bed, serve notice), a
+financial dashboard combining revenue with expenses, the Residents and
 Move-Outs screens, per-floor occupancy statistics, an Alembic baseline, and the
 Supabase RLS policies.

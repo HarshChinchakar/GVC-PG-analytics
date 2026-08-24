@@ -102,6 +102,12 @@ export default async function DashboardPage({ params, searchParams }: Props) {
               current={currentPeriod}
               locationId={d.location_id}
             />
+            <Link
+              href={`/sites/${d.location_id}/expenses?year=${d.period_year}&month=${d.period_month}`}
+              className="btn btn-quiet"
+            >
+              Expenses
+            </Link>
             <Link href="/sites" className="btn btn-quiet sm:hidden">
               Switch site
             </Link>

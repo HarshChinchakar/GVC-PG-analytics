@@ -694,6 +694,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | GET | `/api/v1/locations/{id}/analysis` | **owner** | revenue drill-down behind the rent card |
 | GET | `/api/v1/locations/{id}/occupancy` | any user | the seat map behind the occupancy card |
 | GET | `/api/v1/locations/{id}/vehicles` | any user | vehicle register and lookup |
+| GET | `/api/v1/locations/{id}/expenses` | any user | a month's spend, plus what is still due |
+| POST | `/api/v1/locations/{id}/expenses` | any user | **write** — file an expense |
+| POST | `/api/v1/expenses/{id}/void` | any user | **write** — void one, with a reason |
 | GET | `/api/v1/users` | **owner** | staff list |
 | POST | `/api/v1/users` | **owner** | create a manager |
 | POST | `/api/v1/users/{id}/deactivate` | **owner** | disable an account |
@@ -743,6 +746,7 @@ so the backend address is never published.
 | `/sites/[id]/rent` | revenue analysis — reached by clicking the rent card (owner only) |
 | `/sites/[id]/occupancy` | the seat map — reached by clicking the occupancy card (both roles) |
 | `/sites/[id]/vehicles` | vehicle lookup (both roles) |
+| `/sites/[id]/expenses` | expense entry and ledger (both roles) |
 
 A manager with exactly one building skips the picker.
 
@@ -910,9 +914,91 @@ moved out and never collected it.
 drags occupancy down until the person arrives — and is **excluded from vacancy
 loss**, because that revenue is committed rather than lost.
 
+## 14c. Expenses
+
+The first **write** surface. Open to managers and owners alike — a manager who
+buys cleaning supplies must be able to file it, or the spend is never recorded.
+Which *categories* each role may use is decided server-side.
+
+### Tables
+
+`expense_templates` — a cost that recurs: site, category, payee, usually an
+amount, and the day it falls due. `default_amount` is nullable because some
+recurring costs vary (the electricity bill recurs; its figure does not).
+
+`expenses` — one payment out. Beyond the obvious fields:
+
+| Column | Why |
+|---|---|
+| `paid_by_user_id` **and** `recorded_by_user_id` | a manager buys the supplies, the owner may file it |
+| `paid_from` | site petty cash / business account / **own pocket** — without it, a manager who fronts money is never paid back |
+| `reimbursed_on` | CHECK: only set when `paid_from = 'personal'` |
+| `period_year` / `period_month` | the accounting month, as integers (ADR-007) |
+| `idempotency_key` | UNIQUE — a double-tapped Save cannot book the money twice |
+| `status` + `void_reason` + `voided_by` | nothing is deleted; a mistake is voided, visibly |
+
+### The constraints that matter
+
+```sql
+-- one recurring item, once per month
+UNIQUE (template_id, period_year, period_month)
+  WHERE template_id IS NOT NULL AND status = 'recorded'
+
+-- a void must say why, and by whom
+CHECK (status <> 'void' OR (void_reason IS NOT NULL AND voided_by_user_id IS NOT NULL))
+
+-- only money someone fronted personally can be reimbursed
+CHECK (reimbursed_on IS NULL OR paid_from = 'personal')
+```
+
+`period_year`/`period_month` are set from `expense_date` by one function,
+`period_of()`. The database cannot enforce the correspondence portably —
+SQLite and Postgres extract date parts with different syntax — so
+`crosscheck.py` asserts it on every row instead.
+
+### Permissions
+
+| | Manager | Owner |
+|---|---|---|
+| Day-to-day categories (groceries, repairs, utilities…) | ✅ | ✅ |
+| Site rent, salaries, taxes, insurance, EMI, deposit refunds | ❌ | ✅ |
+| File against another building | ❌ (404) | ✅ |
+| Void own entry | within 24 h | — |
+| Void anyone's entry, any age | ❌ | ✅ |
+
+The manager void window is a rolling 24 hours, not "the same calendar day": a
+manager who files at 11:58pm should not lose the ability to correct it two
+minutes later, and a date comparison across a timezone boundary gets that wrong.
+
+### Designing out the friction
+
+Most PG costs repeat. A form filled from scratch twelve times a year is a form
+that quietly stops being filled, and then the financial picture is wrong. Three
+ways in, fastest first:
+
+1. **Still to record this month** — recurring items with no entry yet, each
+   one tap to pre-fill. This also turns the page from a log into a checklist:
+   an unrecorded site rent is invisible on a list of what *was* paid.
+2. **Repeat** on any past entry, copied forward to today.
+3. The form, for genuinely new spend — site dropdown pre-selected, date
+   defaulted to today, categories as one-tap chips, and the last-used payment
+   mode remembered per browser.
+
+### Write-path safety
+
+* **Idempotency key per attempt**, minted client-side. A replay returns the
+  original row with `created: false` and HTTP **200**, not 201.
+* **CSRF origin check** on the Next.js write proxies. The session cookie is
+  `SameSite=Lax`, which already blocks cross-site POSTs — this is defence in
+  depth, because Lax is a browser behaviour we do not control.
+* **Audit log entry** on every record and every void.
+* **Server-side validation**: positive amount, sane ceiling, no future dates,
+  nothing older than two years, non-blank payee, known category and mode.
+
 ## 15. Not yet built
 
-* Write actions: mark rent paid, assign bed, serve notice, complete move-out
+* The remaining write actions: mark rent paid, assign a bed, serve notice, complete move-out
+* A financial dashboard combining revenue and expenses into margin and P&L
 * Residents, Rent and Move-Outs screens
 * Per-floor occupancy mapping and statistics (the next step you flagged)
 * Rent-record generation for a new month (idempotent via the unique constraint)

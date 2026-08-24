@@ -863,3 +863,155 @@ next to which, in which tier, free from when.
 
 **Cost.** Anyone wanting the headline occupancy figure has to go back one
 screen. That is one tap, and it is where that number lives.
+
+
+---
+
+## ADR-041 — Every write carries an idempotency key ✅
+
+**Decision.** `expenses.idempotency_key` is UNIQUE and required. The client
+mints one per submit attempt; a replay returns the existing row with
+`created: false` and HTTP 200.
+
+**Why.** This is the first thing in the application that writes money, and the
+failure it prevents is ordinary: a manager on a weak connection taps Save,
+sees nothing happen, taps again. Without a key that is two payments on the
+books, and nobody notices until the month does not reconcile.
+
+Required rather than optional, because an optional safety mechanism is one
+that a future caller forgets. Checked *before* validation, so a replay is
+never even re-evaluated.
+
+**Cost.** The client must generate a UUID. `crypto.randomUUID()` is one line.
+
+---
+
+## ADR-042 — Expenses are voided, never deleted ✅
+
+**Decision.** A wrong entry keeps its row and gains `status = 'void'`, a
+reason, an author and a timestamp. A CHECK constraint refuses a void without
+the first two.
+
+**Why.** Spend that disappears from a ledger is worse than spend that is
+visibly wrong: the total silently changes and there is nothing to explain it.
+A struck-through row with "recorded twice by mistake" beside it is a complete
+account of what happened.
+
+**Manager window.** A manager may void only their own entry, and only within
+24 hours — enough to fix a fat-fingered amount, not enough to rewrite a month
+that has already been reported on. Deliberately a rolling window rather than
+"the same calendar day", so filing at 11:58pm does not cost you the ability to
+correct it at midnight.
+
+**Cost.** Every read has to filter on status. Wrapped in `month_view()` so no
+caller can forget.
+
+---
+
+## ADR-043 — Owner-only expense categories ✅
+
+**Decision.** Site rent, salaries, taxes, insurance, EMI and deposit refunds
+can only be filed by a super admin. Enforced in the service; the API returns
+403 with an explanation.
+
+**Why.** A manager runs a building day to day. The lease, the payroll and the
+tax bill are the fixed cost base of the business, and letting a site login
+write to them means whoever holds that login can move the company's cost
+structure. The categories are still *shown* in the form, disabled and marked —
+hiding them entirely would leave a manager wondering where to file the rent.
+
+**403 here, 404 for a foreign site.** A forbidden category is worth explaining:
+it leaks nothing and the user can act on it. A forbidden *building* must stay
+invisible (ADR-010).
+
+**Cost.** A manager who genuinely needs to record a salary must ask an owner.
+That is the intended friction.
+
+---
+
+## ADR-044 — One live booking per recurring item per month ✅
+
+**Decision.** A partial unique index on
+`(template_id, period_year, period_month) WHERE template_id IS NOT NULL AND
+status = 'recorded'`.
+
+**Why.** The whole point of the "still to record this month" checklist is that
+two people can both see the rent is unpaid. Both may tap it. The idempotency
+key does not help — those are two genuine attempts with different keys — so
+the guarantee has to come from the data: October's rent exists once or not at
+all.
+
+Voided rows fall out of the index, so a mistaken entry can be voided and
+re-recorded correctly.
+
+**Cost.** The service has to translate the resulting IntegrityError into
+"already recorded for this month" rather than leaking a database error.
+
+---
+
+## ADR-045 — `paid_from` distinguishes whose money left ✅
+
+**Decision.** Three sources: site petty cash, business account, or personal.
+`reimbursed_on` may only be set on the last, enforced by CHECK.
+
+**Why.** Without it, a manager buying cleaning supplies out of their own pocket
+is indistinguishable from petty cash, and they are never paid back. The page
+totals what is owed to staff so it cannot be forgotten.
+
+**Cost.** One more field on the form, defaulted and remembered between entries.
+
+---
+
+## ADR-046 — CSRF origin check on the write proxies ✅
+
+**Decision.** `assertSameOrigin()` rejects any POST to the Next.js write
+handlers whose `Origin` does not match the host, or that has no `Origin` at all.
+
+**Why.** Reads were safe by construction — a cross-site page cannot set an
+`Authorization` header, and cannot read a cross-origin response. Writes are
+different: the Next.js proxy reads a **cookie**, which is exactly the shape a
+CSRF attack needs.
+
+`SameSite=Lax` already blocks the cookie on a cross-site POST, so this is
+defence in depth rather than the only guard. It is worth having because Lax is
+a browser behaviour we do not control: it has exceptions, it varies by version,
+and a future change to `SameSite=None` for an embed would silently remove the
+protection. An explicit origin check keeps working regardless.
+
+**Cost.** None meaningful. Verified: no origin → 403, foreign origin → 403,
+same origin → 201.
+
+---
+
+## ADR-047 — Recurrence is the interface, not a scheduler ✅
+
+**Decision.** Templates describe recurring costs, but nothing is ever recorded
+automatically. The page lists what is *not yet* recorded and makes each one a
+tap.
+
+**Why.** Auto-posting the rent every month would produce a ledger of things
+nobody checked — and the first time the landlord was not paid, the accounts
+would say otherwise. Keeping a human tap keeps every row an assertion that the
+money actually moved.
+
+Listing the unrecorded items gets most of the benefit anyway: the reason
+expense tracking fails is not that entry is hard, it is that nobody remembers
+what is missing.
+
+**Cost.** Someone still has to open the page each month. The checklist is the
+prompt.
+
+---
+
+## ADR-048 — Sticky header needs `scroll-padding-top` ✅
+
+**Decision.** `html { scroll-padding-top: 5rem }`, plus `scroll-margin-top` on
+the expense form.
+
+**Why.** Found by the Selenium suite, which could not click the form toggle:
+the sticky top bar was intercepting the click. It was a real bug, not a test
+artefact — "Repeat" scrolled to the page top and left the form's first control
+underneath the header, invisible and untappable on a phone.
+
+**Cost.** None. Worth recording because a sticky header breaks every in-page
+scroll target, and it is invisible until something tries to click one.

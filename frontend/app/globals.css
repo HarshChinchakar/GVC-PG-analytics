@@ -128,7 +128,12 @@
 
   * { border-color: var(--rule); }
 
-  html { -webkit-text-size-adjust: 100%; }
+  html {
+    -webkit-text-size-adjust: 100%;
+    /* The top bar is sticky, so anything scrolled to must clear it or it
+       lands underneath and cannot be tapped. */
+    scroll-padding-top: 5rem;
+  }
 
   body {
     /* One step darker than .sheet, so every card has something to sit on. */

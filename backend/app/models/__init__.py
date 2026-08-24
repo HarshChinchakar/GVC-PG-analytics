@@ -7,6 +7,7 @@ Importing this package registers every mapper on `Base.metadata`, which is what
 from app.db.base import Base
 from app.models.audit import AuditLog
 from app.models.deposit import Deposit, DepositRefund
+from app.models.expense import Expense, ExpenseTemplate
 from app.models.location import Bed, Flat, Floor, Location, Room
 from app.models.moveout import MoveOutNotice
 from app.models.occupancy import BedReservation, Vehicle, normalise_plate
@@ -20,6 +21,8 @@ __all__ = [
     "Bed",
     "Deposit",
     "DepositRefund",
+    "Expense",
+    "ExpenseTemplate",
     "Flat",
     "Floor",
     "Location",
